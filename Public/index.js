@@ -12,7 +12,12 @@ const UI = {
     lastUpdate: document.getElementById("lastUpdate"),
     heroBadge: document.getElementById("heroBadge"),
     heroSubtitle: document.getElementById("heroSubtitle"),
-    refreshBtn: document.getElementById("refreshBtn")
+    refreshBtn: document.getElementById("refreshBtn"),
+
+    manualCoordinatorInput: document.getElementById("manualCoordinatorInput"),
+    addCoordinatorBtn: document.getElementById("addCoordinatorBtn"),
+    switchCoordinatorBtn: document.getElementById("switchCoordinatorBtn"),
+    manualActionMessage: document.getElementById("manualActionMessage")
 };
 
 let lastCoordinator = null;
@@ -41,6 +46,18 @@ function setText(el, value) {
         el.textContent = newValue;
         el.classList.add("value-pop");
     }
+}
+
+function showManualMessage(message, type = "neutral") {
+    if (!UI.manualActionMessage) return;
+
+    UI.manualActionMessage.className = "manual-message";
+    UI.manualActionMessage.classList.add(type);
+    UI.manualActionMessage.textContent = message;
+}
+
+function getManualUrl() {
+    return UI.manualCoordinatorInput?.value?.trim() || "";
 }
 
 // =========================
@@ -200,6 +217,75 @@ async function fetchStatus() {
 }
 
 // =========================
+// ACCIONES MANUALES
+// =========================
+async function addCoordinatorManually() {
+    const url = getManualUrl();
+
+    if (!url) {
+        showManualMessage("Debes ingresar una URL válida", "error");
+        return;
+    }
+
+    try {
+        const res = await fetch("/coordinators/add", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ url })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+            showManualMessage(data.message || "No se pudo agregar el coordinador", "error");
+            return;
+        }
+
+        showManualMessage(data.message || "Coordinador agregado", "success");
+        await fetchStatus();
+    } catch (error) {
+        console.error(error);
+        showManualMessage("Error agregando coordinador", "error");
+    }
+}
+
+async function switchCoordinatorManually() {
+    const url = getManualUrl();
+
+    if (!url) {
+        showManualMessage("Debes ingresar una URL válida", "error");
+        return;
+    }
+
+    try {
+        showManualMessage("Intentando cambiar manualmente...", "neutral");
+
+        const res = await fetch("/switch-coordinator", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ url })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+            showManualMessage(data.message || "No se pudo cambiar de coordinador", "error");
+            return;
+        }
+
+        showManualMessage(data.message || "Cambio manual exitoso", "success");
+        await fetchStatus();
+    } catch (error) {
+        console.error(error);
+        showManualMessage("Error en el cambio manual", "error");
+    }
+}
+
+// =========================
 // AUTO REFRESH
 // =========================
 function startAutoRefresh() {
@@ -222,4 +308,13 @@ document.addEventListener("DOMContentLoaded", () => {
             fetchStatus();
         });
     }
+
+    UI.addCoordinatorBtn?.addEventListener("click", addCoordinatorManually);
+    UI.switchCoordinatorBtn?.addEventListener("click", switchCoordinatorManually);
+
+    UI.manualCoordinatorInput?.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+            switchCoordinatorManually();
+        }
+    });
 });

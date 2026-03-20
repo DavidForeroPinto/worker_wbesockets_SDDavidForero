@@ -11,6 +11,7 @@ const PRIMARY_COORDINATOR = process.argv[3];
 const PUBLIC_URL = process.argv[4];
 const PULSE_INTERVAL = 2000;
 const PRIMARY_RETRY_INTERVAL = 10000;
+const CONNECTION_TIMEOUT = 4000;
 
 if (!PRIMARY_COORDINATOR || !PUBLIC_URL) {
     console.log("Uso: node server.js <PUERTO> <WS_COORDINADOR> <URL_PUBLICA>");
@@ -34,6 +35,9 @@ let intervaloPulso = null;
 let intentoPrimarioEnCurso = false;
 let socketSequence = 0;
 
+// =========================
+// UTILIDADES
+// =========================
 function limpiarIntervaloPulso() {
     if (intervaloPulso) {
         clearInterval(intervaloPulso);
@@ -46,7 +50,10 @@ function cerrarSocketActual() {
 
     try {
         ws.removeAllListeners();
-        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        if (
+            ws.readyState === WebSocket.OPEN ||
+            ws.readyState === WebSocket.CONNECTING
+        ) {
             ws.close();
         }
     } catch (error) {
@@ -56,11 +63,18 @@ function cerrarSocketActual() {
     ws = null;
 }
 
+function esWebSocketValido(url) {
+    return typeof url === "string" && /^wss?:\/\/.+/i.test(url.trim());
+}
+
 function agregarCoordinador(url) {
-    if (!url || typeof url !== "string") return;
-    if (!coordinadores.includes(url)) {
-        coordinadores.push(url);
-        console.log("Coordinador agregado:", url);
+    if (!esWebSocketValido(url)) return;
+
+    const limpio = url.trim();
+
+    if (!coordinadores.includes(limpio)) {
+        coordinadores.push(limpio);
+        console.log("Coordinador agregado:", limpio);
     }
 }
 
@@ -81,30 +95,32 @@ function iniciarPulso() {
     intervaloPulso = setInterval(sendPulse, PULSE_INTERVAL);
 }
 
-function connect(targetUrl = coordinadorActual, options = {}) {
+function register() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    ws.send(JSON.stringify({
+        type: "register",
+        id,
+        url: PUBLIC_URL
+    }));
+
+    estado = "alive";
+    console.log(`Registrado en ${coordinadorActual}`);
+}
+
+function attachSocketListeners(socket, targetUrl, options = {}) {
     const {
-        triggerFailoverOnClose = true,
-        updateCurrentCoordinator = true
+        triggerFailoverOnClose = true
     } = options;
 
     const connectionId = ++socketSequence;
-
-    limpiarIntervaloPulso();
-    cerrarSocketActual();
-
-    if (updateCurrentCoordinator) {
-        coordinadorActual = targetUrl;
-    }
-
-    console.log(`Conectando a: ${targetUrl}`);
-
-    const socket = new WebSocket(targetUrl);
     ws = socket;
 
     socket.on("open", () => {
         if (connectionId !== socketSequence) return;
 
         console.log("Conectado al coordinador:", targetUrl);
+        coordinadorActual = targetUrl;
         estado = "alive";
 
         register();
@@ -149,17 +165,143 @@ function connect(targetUrl = coordinadorActual, options = {}) {
     });
 }
 
-function register() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+function connect(targetUrl = coordinadorActual, options = {}) {
+    const {
+        triggerFailoverOnClose = true
+    } = options;
 
-    ws.send(JSON.stringify({
-        type: "register",
-        id,
-        url: PUBLIC_URL
-    }));
+    limpiarIntervaloPulso();
+    cerrarSocketActual();
 
-    estado = "alive";
-    console.log(`Registrado en ${coordinadorActual}`);
+    console.log(`Conectando a: ${targetUrl}`);
+
+    const socket = new WebSocket(targetUrl);
+    attachSocketListeners(socket, targetUrl, { triggerFailoverOnClose });
+}
+
+function probarConexion(url, timeout = CONNECTION_TIMEOUT) {
+    return new Promise((resolve) => {
+        let terminado = false;
+        const testSocket = new WebSocket(url);
+
+        const finalizar = (resultado) => {
+            if (terminado) return;
+            terminado = true;
+
+            clearTimeout(timer);
+
+            try {
+                testSocket.removeAllListeners();
+                if (
+                    testSocket.readyState === WebSocket.OPEN ||
+                    testSocket.readyState === WebSocket.CONNECTING
+                ) {
+                    testSocket.close();
+                }
+            } catch (_) {}
+
+            resolve(resultado);
+        };
+
+        const timer = setTimeout(() => {
+            console.log("Timeout conectando a:", url);
+            finalizar(false);
+        }, timeout);
+
+        testSocket.on("open", () => {
+            console.log("Coordinador disponible:", url);
+            finalizar(true);
+        });
+
+        testSocket.on("error", () => {
+            console.log("Coordinador no disponible:", url);
+            finalizar(false);
+        });
+
+        testSocket.on("close", () => {
+            if (!terminado) {
+                finalizar(false);
+            }
+        });
+    });
+}
+
+async function hacerFailover() {
+    if (failoverEnCurso) return;
+
+    failoverEnCurso = true;
+    estado = "failover";
+    limpiarIntervaloPulso();
+
+    const anterior = coordinadorActual;
+    const candidatos = coordinadores.filter((c) => c !== anterior);
+
+    if (candidatos.length === 0) {
+        console.log("No hay coordinadores disponibles");
+        estado = "offline";
+        failoverEnCurso = false;
+        return;
+    }
+
+    console.log("Iniciando failover...");
+    console.log("Candidatos:", candidatos);
+
+    for (const candidato of candidatos) {
+        const disponible = await probarConexion(candidato);
+
+        if (disponible) {
+            console.log("Failover exitoso. Nuevo coordinador:", candidato);
+
+            connect(candidato, {
+                triggerFailoverOnClose: true
+            });
+
+            failoverEnCurso = false;
+            return;
+        }
+    }
+
+    console.log("Ningún backup disponible");
+    estado = "offline";
+    failoverEnCurso = false;
+}
+
+async function cambiarCoordinadorManual(nuevoUrl) {
+    if (!esWebSocketValido(nuevoUrl)) {
+        return {
+            ok: false,
+            message: "URL de WebSocket inválida. Debe iniciar con ws:// o wss://"
+        };
+    }
+
+    const url = nuevoUrl.trim();
+
+    agregarCoordinador(url);
+
+    estado = "failover";
+    limpiarIntervaloPulso();
+
+    const disponible = await probarConexion(url);
+
+    if (!disponible) {
+        estado = ws && ws.readyState === WebSocket.OPEN ? "alive" : "offline";
+        return {
+            ok: false,
+            message: "No fue posible conectarse manualmente al coordinador indicado"
+        };
+    }
+
+    console.log("Cambio manual de coordinador a:", url);
+
+    connect(url, {
+        triggerFailoverOnClose: true
+    });
+
+    return {
+        ok: true,
+        message: "Cambio manual realizado correctamente",
+        coordinator: url
+    };
 }
 
 function sendPulse() {
@@ -182,35 +324,6 @@ function sendPulse() {
         console.log("Error enviando pulso:", error.message);
         hacerFailover();
     }
-}
-
-function hacerFailover() {
-    if (failoverEnCurso) return;
-
-    failoverEnCurso = true;
-    estado = "failover";
-    limpiarIntervaloPulso();
-
-    const anterior = coordinadorActual;
-    const candidatos = coordinadores.filter((c) => c !== anterior);
-
-    if (candidatos.length === 0) {
-        console.log("No hay coordinadores disponibles");
-        estado = "offline";
-        failoverEnCurso = false;
-        return;
-    }
-
-    const siguiente = candidatos[0];
-    console.log("Iniciando failover...");
-    console.log("Intentando con:", siguiente);
-
-    connect(siguiente, {
-        triggerFailoverOnClose: true,
-        updateCurrentCoordinator: true
-    });
-
-    failoverEnCurso = false;
 }
 
 function intentarReconectarAlPrimario() {
@@ -243,8 +356,7 @@ function intentarReconectarAlPrimario() {
         cleanup();
 
         connect(primario, {
-            triggerFailoverOnClose: true,
-            updateCurrentCoordinator: true
+            triggerFailoverOnClose: true
         });
     });
 
@@ -258,6 +370,9 @@ function intentarReconectarAlPrimario() {
     });
 }
 
+// =========================
+// API
+// =========================
 app.get("/status", (req, res) => {
     res.json({
         id,
@@ -266,6 +381,47 @@ app.get("/status", (req, res) => {
         lista: coordinadores,
         timeStamp: Date.now(),
         lastHeartbeat
+    });
+});
+
+app.post("/coordinators/add", (req, res) => {
+    const { url } = req.body || {};
+
+    if (!esWebSocketValido(url)) {
+        return res.status(400).json({
+            ok: false,
+            message: "URL inválida. Debe iniciar con ws:// o wss://"
+        });
+    }
+
+    agregarCoordinador(url);
+
+    return res.json({
+        ok: true,
+        message: "Coordinador agregado correctamente",
+        lista: coordinadores
+    });
+});
+
+app.post("/switch-coordinator", async (req, res) => {
+    const { url } = req.body || {};
+
+    if (!esWebSocketValido(url)) {
+        return res.status(400).json({
+            ok: false,
+            message: "URL inválida. Debe iniciar con ws:// o wss://"
+        });
+    }
+
+    const result = await cambiarCoordinadorManual(url);
+
+    if (!result.ok) {
+        return res.status(400).json(result);
+    }
+
+    return res.json({
+        ...result,
+        lista: coordinadores
     });
 });
 

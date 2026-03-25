@@ -12,20 +12,17 @@ const UI = {
     lastUpdate: document.getElementById("lastUpdate"),
     heroBadge: document.getElementById("heroBadge"),
     heroSubtitle: document.getElementById("heroSubtitle"),
-    refreshBtn: document.getElementById("refreshBtn"),
 
     manualCoordinatorInput: document.getElementById("manualCoordinatorInput"),
     addCoordinatorBtn: document.getElementById("addCoordinatorBtn"),
     switchCoordinatorBtn: document.getElementById("switchCoordinatorBtn"),
+    switchAvailableBtn: document.getElementById("switchAvailableBtn"),
     manualActionMessage: document.getElementById("manualActionMessage")
 };
 
 let lastCoordinator = null;
 let refreshInterval = null;
 
-// =========================
-// UTILIDADES
-// =========================
 function formatDate(ts) {
     if (!ts) return "No disponible";
 
@@ -60,9 +57,6 @@ function getManualUrl() {
     return UI.manualCoordinatorInput?.value?.trim() || "";
 }
 
-// =========================
-// ESTADO VISUAL GENERAL
-// =========================
 function updateStatusVisual(status) {
     const normalized = String(status || "").toLowerCase();
 
@@ -84,21 +78,18 @@ function updateStatusVisual(status) {
         subtitle = "El nodo está respondiendo correctamente";
         UI.workerStatus?.classList.add("online");
         UI.statusDot?.classList.add("online");
-
     } else if (normalized === "failover") {
         label = "Failover";
         hero = "Conmutación activa";
         subtitle = "El worker está intentando cambiar a un coordinador de respaldo";
         UI.workerStatus?.classList.add("warning");
         UI.statusDot?.classList.add("warning");
-
     } else if (normalized === "offline") {
         label = "Caído";
         hero = "Sin conexión";
         subtitle = "No hay comunicación con el coordinador";
         UI.workerStatus?.classList.add("offline");
         UI.statusDot?.classList.add("offline");
-
     } else {
         UI.workerStatus?.classList.add("neutral");
         UI.statusDot?.classList.add("neutral");
@@ -110,9 +101,6 @@ function updateStatusVisual(status) {
     setText(UI.heroSubtitle, subtitle);
 }
 
-// =========================
-// LISTA DE COORDINADORES
-// =========================
 function buildCoordinatorList(lista = [], actual = "", status = "offline") {
     if (!UI.coordinatorList) return;
 
@@ -162,9 +150,6 @@ function buildCoordinatorList(lista = [], actual = "", status = "offline") {
     });
 }
 
-// =========================
-// ANIMACIÓN DE CAMBIO
-// =========================
 function animateCoordinatorChange(actual) {
     if (!actual || actual === lastCoordinator) return;
 
@@ -179,9 +164,6 @@ function animateCoordinatorChange(actual) {
     lastCoordinator = actual;
 }
 
-// =========================
-// OBTENER ESTADO
-// =========================
 async function fetchStatus() {
     try {
         const res = await fetch("/status", { cache: "no-store" });
@@ -197,13 +179,11 @@ async function fetchStatus() {
 
         setText(UI.timeStamp, formatDate(data.timeStamp));
         setText(UI.lastUpdate, `Última actualización: ${formatDate(data.timeStamp)}`);
-
         setText(UI.totalCoords, Array.isArray(data.lista) ? data.lista.length : 0);
 
         updateStatusVisual(data.status);
         buildCoordinatorList(data.lista, data.coordinator, data.status);
         animateCoordinatorChange(data.coordinator);
-
     } catch (error) {
         console.error(error);
 
@@ -216,9 +196,6 @@ async function fetchStatus() {
     }
 }
 
-// =========================
-// ACCIONES MANUALES
-// =========================
 async function addCoordinatorManually() {
     const url = getManualUrl();
 
@@ -285,32 +262,44 @@ async function switchCoordinatorManually() {
     }
 }
 
-// =========================
-// AUTO REFRESH
-// =========================
+async function switchToNextAvailable() {
+    try {
+        showManualMessage("Buscando backup disponible en la lista...", "neutral");
+
+        const res = await fetch("/switch-next-available", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            }
+        });
+
+        const data = await res.json();
+
+        if (!res.ok) {
+            showManualMessage(data.message || "No se encontró backup disponible", "error");
+            return;
+        }
+
+        showManualMessage(data.message || "Cambio exitoso al backup disponible", "success");
+        await fetchStatus();
+    } catch (error) {
+        console.error(error);
+        showManualMessage("Error buscando backup disponible", "error");
+    }
+}
+
 function startAutoRefresh() {
     if (refreshInterval) clearInterval(refreshInterval);
     refreshInterval = setInterval(fetchStatus, 2000);
 }
 
-// =========================
-// INIT
-// =========================
 document.addEventListener("DOMContentLoaded", () => {
     fetchStatus();
     startAutoRefresh();
 
-    if (UI.refreshBtn) {
-        UI.refreshBtn.addEventListener("click", () => {
-            UI.refreshBtn.classList.remove("spin-once");
-            void UI.refreshBtn.offsetWidth;
-            UI.refreshBtn.classList.add("spin-once");
-            fetchStatus();
-        });
-    }
-
     UI.addCoordinatorBtn?.addEventListener("click", addCoordinatorManually);
     UI.switchCoordinatorBtn?.addEventListener("click", switchCoordinatorManually);
+    UI.switchAvailableBtn?.addEventListener("click", switchToNextAvailable);
 
     UI.manualCoordinatorInput?.addEventListener("keydown", (e) => {
         if (e.key === "Enter") {

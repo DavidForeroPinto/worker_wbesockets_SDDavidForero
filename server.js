@@ -9,6 +9,7 @@ const app = express();
 const PORT = Number(process.argv[2]) || 4000;
 const PRIMARY_COORDINATOR = process.argv[3];
 const PUBLIC_URL = process.argv[4];
+
 const PULSE_INTERVAL = 2000;
 const PRIMARY_RETRY_INTERVAL = 10000;
 const CONNECTION_TIMEOUT = 4000;
@@ -35,6 +36,10 @@ let intervaloPulso = null;
 let intentoPrimarioEnCurso = false;
 let socketSequence = 0;
 
+// Historial simple de tareas para monitoreo
+let ultimaTarea = null;
+let historialTareas = [];
+
 // =========================
 // UTILIDADES
 // =========================
@@ -43,24 +48,6 @@ function limpiarIntervaloPulso() {
         clearInterval(intervaloPulso);
         intervaloPulso = null;
     }
-}
-
-function cerrarSocketActual() {
-    if (!ws) return;
-
-    try {
-        ws.removeAllListeners();
-        if (
-            ws.readyState === WebSocket.OPEN ||
-            ws.readyState === WebSocket.CONNECTING
-        ) {
-            ws.close();
-        }
-    } catch (error) {
-        console.log("No se pudo cerrar el socket actual:", error.message);
-    }
-
-    ws = null;
 }
 
 function esWebSocketValido(url) {
@@ -92,42 +79,233 @@ function registrarBackupsDesdeMensaje(data) {
 
 function iniciarPulso() {
     limpiarIntervaloPulso();
-    intervaloPulso = setInterval(sendPulse, PULSE_INTERVAL);
+
+    intervaloPulso = setInterval(() => {
+        if (lastHeartbeat && Date.now() - lastHeartbeat > CONNECTION_TIMEOUT) {
+            console.log("Heartbeat expirado. Iniciando failover...");
+            hacerFailover();
+            return;
+        }
+
+        sendPulse();
+    }, PULSE_INTERVAL);
+}
+
+function cerrarSocketActual() {
+    if (!ws) return;
+
+    const socketAnterior = ws;
+    ws = null;
+
+    try {
+        if (socketAnterior.readyState === WebSocket.CONNECTING) {
+            socketAnterior.terminate();
+            return;
+        }
+
+        if (socketAnterior.readyState === WebSocket.OPEN) {
+            socketAnterior.close();
+        }
+    } catch (error) {
+        console.log("No se pudo cerrar el socket actual:", error.message);
+    }
+}
+
+function enviarMensaje(payload) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        console.log("No se pudo enviar mensaje: socket no disponible");
+        return false;
+    }
+
+    try {
+        ws.send(JSON.stringify(payload));
+        return true;
+    } catch (error) {
+        console.log("Error enviando mensaje:", error.message);
+        return false;
+    }
 }
 
 function register() {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-    ws.send(JSON.stringify({
+    enviarMensaje({
         type: "register",
         id,
         url: PUBLIC_URL
-    }));
+    });
 
-    estado = "alive";
     console.log(`Registrado en ${coordinadorActual}`);
 }
 
-function attachSocketListeners(socket, targetUrl, options = {}) {
+// =========================
+// MANEJO DE TASKS
+// =========================
+function registrarResultadoTarea(registro) {
+    ultimaTarea = registro;
+    historialTareas.push(registro);
+
+    if (historialTareas.length > 20) {
+        historialTareas = historialTareas.slice(-20);
+    }
+}
+
+function resolverOperacion(data = {}) {
+    const operacion = String(data.operacion || data.operation || "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+
+    const a = Number(data.a);
+    const b = Number(data.b);
+    const n = Number(data.n);
+
+    switch (operacion) {
+        case "sum":
+        case "suma":
+            if (Number.isNaN(a) || Number.isNaN(b)) {
+                throw new Error("La operación suma requiere valores numéricos 'a' y 'b'");
+            }
+            return a + b;
+
+        case "subtract":
+        case "resta":
+            if (Number.isNaN(a) || Number.isNaN(b)) {
+                throw new Error("La operación resta requiere valores numéricos 'a' y 'b'");
+            }
+            return a - b;
+
+        case "multiply":
+        case "multiplicacion":
+        case "multiplicar":
+            if (Number.isNaN(a) || Number.isNaN(b)) {
+                throw new Error("La operación multiplicación requiere valores numéricos 'a' y 'b'");
+            }
+            return a * b;
+
+        case "divide":
+        case "division":
+            if (Number.isNaN(a) || Number.isNaN(b)) {
+                throw new Error("La operación división requiere valores numéricos 'a' y 'b'");
+            }
+            if (b === 0) {
+                throw new Error("No se puede dividir por cero");
+            }
+            return a / b;
+
+        case "square":
+        case "cuadrado":
+            if (Number.isNaN(n)) {
+                throw new Error("La operación cuadrado requiere un valor numérico 'n'");
+            }
+            return n * n;
+
+        default:
+            throw new Error(`Operación no soportada: ${operacion || "vacía"}`);
+    }
+}
+
+async function procesarTask(taskMessage) {
+    const taskId = taskMessage.taskId || taskMessage.idTask || crypto.randomUUID();
+    const payload = taskMessage.payload || taskMessage.data || {};
+
+    console.log("Tarea recibida:", { taskId, payload });
+
+    const inicio = Date.now();
+
+    try {
+        const result = resolverOperacion(payload);
+
+        const registro = {
+            taskId,
+            status: "success",
+            coordinator: coordinadorActual,
+            receivedAt: inicio,
+            finishedAt: Date.now(),
+            payload,
+            result
+        };
+
+        registrarResultadoTarea(registro);
+
+        const enviado = enviarMensaje({
+            type: "task-result",
+            workerId: id,
+            taskId,
+            result,
+            timeStamp: Date.now()
+        });
+
+        if (!enviado) {
+            console.log("No se pudo enviar task-result");
+        }
+
+        console.log("Tarea procesada con éxito:", { taskId, result });
+    } catch (error) {
+        const registro = {
+            taskId,
+            status: "error",
+            coordinator: coordinadorActual,
+            receivedAt: inicio,
+            finishedAt: Date.now(),
+            payload,
+            error: error.message
+        };
+
+        registrarResultadoTarea(registro);
+
+        const enviado = enviarMensaje({
+            type: "task-error",
+            workerId: id,
+            taskId,
+            error: error.message,
+            timeStamp: Date.now()
+        });
+
+        if (!enviado) {
+            console.log("No se pudo enviar task-error");
+        }
+
+        console.log("Error procesando tarea:", { taskId, error: error.message });
+    }
+}
+
+// =========================
+// WEBSOCKET
+// =========================
+function connect(targetUrl = coordinadorActual, options = {}) {
     const {
         triggerFailoverOnClose = true
     } = options;
 
+    limpiarIntervaloPulso();
+    cerrarSocketActual();
+
+    console.log(`Conectando a: ${targetUrl}`);
+
+    const socket = new WebSocket(targetUrl);
     const connectionId = ++socketSequence;
     ws = socket;
 
     socket.on("open", () => {
-        if (connectionId !== socketSequence) return;
+        if (connectionId !== socketSequence) {
+            try {
+                socket.close();
+            } catch (_) {}
+            return;
+        }
 
         console.log("Conectado al coordinador:", targetUrl);
         coordinadorActual = targetUrl;
         estado = "alive";
+        lastHeartbeat = Date.now();
+        failoverEnCurso = false;
 
         register();
         iniciarPulso();
     });
 
-    socket.on("message", (msg) => {
+    socket.on("message", async (msg) => {
         if (connectionId !== socketSequence) return;
 
         try {
@@ -143,13 +321,21 @@ function attachSocketListeners(socket, targetUrl, options = {}) {
                 lastHeartbeat = Date.now();
                 registrarBackupsDesdeMensaje(data);
             }
+
+            if (data.type === "task") {
+                await procesarTask(data);
+            }
         } catch (error) {
             console.log("Mensaje inválido");
         }
     });
 
     socket.on("error", (err) => {
-        if (connectionId !== socketSequence) return;
+        if (connectionId !== socketSequence) {
+            console.log("Error de socket viejo ignorado:", err.message);
+            return;
+        }
+
         console.log("Error WS:", err.message);
     });
 
@@ -165,20 +351,6 @@ function attachSocketListeners(socket, targetUrl, options = {}) {
     });
 }
 
-function connect(targetUrl = coordinadorActual, options = {}) {
-    const {
-        triggerFailoverOnClose = true
-    } = options;
-
-    limpiarIntervaloPulso();
-    cerrarSocketActual();
-
-    console.log(`Conectando a: ${targetUrl}`);
-
-    const socket = new WebSocket(targetUrl);
-    attachSocketListeners(socket, targetUrl, { triggerFailoverOnClose });
-}
-
 function probarConexion(url, timeout = CONNECTION_TIMEOUT) {
     return new Promise((resolve) => {
         let terminado = false;
@@ -192,11 +364,12 @@ function probarConexion(url, timeout = CONNECTION_TIMEOUT) {
 
             try {
                 testSocket.removeAllListeners();
+
                 if (
                     testSocket.readyState === WebSocket.OPEN ||
                     testSocket.readyState === WebSocket.CONNECTING
                 ) {
-                    testSocket.close();
+                    testSocket.terminate();
                 }
             } catch (_) {}
 
@@ -304,6 +477,49 @@ async function cambiarCoordinadorManual(nuevoUrl) {
     };
 }
 
+async function cambiarAlSiguienteBackupDisponible() {
+    const backups = coordinadores.slice(1);
+    const candidatos = backups.filter((c) => c !== coordinadorActual);
+
+    if (candidatos.length === 0) {
+        return {
+            ok: false,
+            message: "No hay backups disponibles distintos al coordinador actual"
+        };
+    }
+
+    estado = "failover";
+    limpiarIntervaloPulso();
+
+    console.log("Buscando backup disponible...");
+    console.log("Backups candidatos:", candidatos);
+
+    for (const candidato of candidatos) {
+        const disponible = await probarConexion(candidato);
+
+        if (disponible) {
+            console.log("Cambio exitoso al backup:", candidato);
+
+            connect(candidato, {
+                triggerFailoverOnClose: true
+            });
+
+            return {
+                ok: true,
+                message: `Cambio realizado al backup disponible: ${candidato}`,
+                coordinator: candidato
+            };
+        }
+    }
+
+    estado = ws && ws.readyState === WebSocket.OPEN ? "alive" : "offline";
+
+    return {
+        ok: false,
+        message: "Ningún backup de la lista está disponible"
+    };
+}
+
 function sendPulse() {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
         console.log("No se pudo enviar pulso: socket no disponible");
@@ -317,8 +533,6 @@ function sendPulse() {
             id
         }));
 
-        lastHeartbeat = Date.now();
-        estado = "alive";
         console.log(`Pulso enviado a ${coordinadorActual}`);
     } catch (error) {
         console.log("Error enviando pulso:", error.message);
@@ -336,38 +550,25 @@ function intentarReconectarAlPrimario() {
     intentoPrimarioEnCurso = true;
     console.log("Intentando volver al primario:", primario);
 
-    const testSocket = new WebSocket(primario);
-
-    const cleanup = () => {
-        testSocket.removeAllListeners();
-        try {
-            if (
-                testSocket.readyState === WebSocket.OPEN ||
-                testSocket.readyState === WebSocket.CONNECTING
-            ) {
-                testSocket.close();
+    probarConexion(primario)
+        .then((disponible) => {
+            if (!disponible) {
+                console.log("Primario todavía no disponible");
+                return;
             }
-        } catch (_) {}
-        intentoPrimarioEnCurso = false;
-    };
 
-    testSocket.on("open", () => {
-        console.log("Primario disponible nuevamente:", primario);
-        cleanup();
+            console.log("Primario disponible nuevamente:", primario);
 
-        connect(primario, {
-            triggerFailoverOnClose: true
+            connect(primario, {
+                triggerFailoverOnClose: true
+            });
+        })
+        .catch((error) => {
+            console.log("Error verificando primario:", error.message);
+        })
+        .finally(() => {
+            intentoPrimarioEnCurso = false;
         });
-    });
-
-    testSocket.on("error", () => {
-        console.log("Primario todavía no disponible");
-        cleanup();
-    });
-
-    testSocket.on("close", () => {
-        intentoPrimarioEnCurso = false;
-    });
 }
 
 // =========================
@@ -380,7 +581,9 @@ app.get("/status", (req, res) => {
         coordinator: coordinadorActual,
         lista: coordinadores,
         timeStamp: Date.now(),
-        lastHeartbeat
+        lastHeartbeat,
+        ultimaTarea,
+        historialTareas
     });
 });
 
@@ -417,6 +620,22 @@ app.post("/switch-coordinator", async (req, res) => {
 
     if (!result.ok) {
         return res.status(400).json(result);
+    }
+
+    return res.json({
+        ...result,
+        lista: coordinadores
+    });
+});
+
+app.post("/switch-next-available", async (req, res) => {
+    const result = await cambiarAlSiguienteBackupDisponible();
+
+    if (!result.ok) {
+        return res.status(400).json({
+            ...result,
+            lista: coordinadores
+        });
     }
 
     return res.json({

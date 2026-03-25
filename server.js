@@ -36,10 +36,6 @@ let intervaloPulso = null;
 let intentoPrimarioEnCurso = false;
 let socketSequence = 0;
 
-// Historial simple de tareas para monitoreo
-let ultimaTarea = null;
-let historialTareas = [];
-
 // =========================
 // UTILIDADES
 // =========================
@@ -139,138 +135,6 @@ function register() {
 }
 
 // =========================
-// MANEJO DE TASKS
-// =========================
-function registrarResultadoTarea(registro) {
-    ultimaTarea = registro;
-    historialTareas.push(registro);
-
-    if (historialTareas.length > 20) {
-        historialTareas = historialTareas.slice(-20);
-    }
-}
-
-function resolverOperacion(data = {}) {
-    const operacion = String(data.operacion || data.operation || "")
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "");
-
-    const a = Number(data.a);
-    const b = Number(data.b);
-    const n = Number(data.n);
-
-    switch (operacion) {
-        case "sum":
-        case "suma":
-            if (Number.isNaN(a) || Number.isNaN(b)) {
-                throw new Error("La operación suma requiere valores numéricos 'a' y 'b'");
-            }
-            return a + b;
-
-        case "subtract":
-        case "resta":
-            if (Number.isNaN(a) || Number.isNaN(b)) {
-                throw new Error("La operación resta requiere valores numéricos 'a' y 'b'");
-            }
-            return a - b;
-
-        case "multiply":
-        case "multiplicacion":
-        case "multiplicar":
-            if (Number.isNaN(a) || Number.isNaN(b)) {
-                throw new Error("La operación multiplicación requiere valores numéricos 'a' y 'b'");
-            }
-            return a * b;
-
-        case "divide":
-        case "division":
-            if (Number.isNaN(a) || Number.isNaN(b)) {
-                throw new Error("La operación división requiere valores numéricos 'a' y 'b'");
-            }
-            if (b === 0) {
-                throw new Error("No se puede dividir por cero");
-            }
-            return a / b;
-
-        case "square":
-        case "cuadrado":
-            if (Number.isNaN(n)) {
-                throw new Error("La operación cuadrado requiere un valor numérico 'n'");
-            }
-            return n * n;
-
-        default:
-            throw new Error(`Operación no soportada: ${operacion || "vacía"}`);
-    }
-}
-
-async function procesarTask(taskMessage) {
-    const taskId = taskMessage.taskId || taskMessage.idTask || crypto.randomUUID();
-    const payload = taskMessage.payload || taskMessage.data || {};
-
-    console.log("Tarea recibida:", { taskId, payload });
-
-    const inicio = Date.now();
-
-    try {
-        const result = resolverOperacion(payload);
-
-        const registro = {
-            taskId,
-            status: "success",
-            coordinator: coordinadorActual,
-            receivedAt: inicio,
-            finishedAt: Date.now(),
-            payload,
-            result
-        };
-
-        registrarResultadoTarea(registro);
-
-        const enviado = enviarMensaje({
-            type: "task-result",
-            workerId: id,
-            taskId,
-            result,
-            timeStamp: Date.now()
-        });
-
-        if (!enviado) {
-            console.log("No se pudo enviar task-result");
-        }
-
-        console.log("Tarea procesada con éxito:", { taskId, result });
-    } catch (error) {
-        const registro = {
-            taskId,
-            status: "error",
-            coordinator: coordinadorActual,
-            receivedAt: inicio,
-            finishedAt: Date.now(),
-            payload,
-            error: error.message
-        };
-
-        registrarResultadoTarea(registro);
-
-        const enviado = enviarMensaje({
-            type: "task-error",
-            workerId: id,
-            taskId,
-            error: error.message,
-            timeStamp: Date.now()
-        });
-
-        if (!enviado) {
-            console.log("No se pudo enviar task-error");
-        }
-
-        console.log("Error procesando tarea:", { taskId, error: error.message });
-    }
-}
-
-// =========================
 // WEBSOCKET
 // =========================
 function connect(targetUrl = coordinadorActual, options = {}) {
@@ -305,7 +169,7 @@ function connect(targetUrl = coordinadorActual, options = {}) {
         iniciarPulso();
     });
 
-    socket.on("message", async (msg) => {
+    socket.on("message", (msg) => {
         if (connectionId !== socketSequence) return;
 
         try {
@@ -320,10 +184,6 @@ function connect(targetUrl = coordinadorActual, options = {}) {
                 estado = "alive";
                 lastHeartbeat = Date.now();
                 registrarBackupsDesdeMensaje(data);
-            }
-
-            if (data.type === "task") {
-                await procesarTask(data);
             }
         } catch (error) {
             console.log("Mensaje inválido");
@@ -581,9 +441,7 @@ app.get("/status", (req, res) => {
         coordinator: coordinadorActual,
         lista: coordinadores,
         timeStamp: Date.now(),
-        lastHeartbeat,
-        ultimaTarea,
-        historialTareas
+        lastHeartbeat
     });
 });
 

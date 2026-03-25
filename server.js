@@ -12,7 +12,7 @@ const PUBLIC_URL = process.argv[4];
 
 const PULSE_INTERVAL = 2000;
 const PRIMARY_RETRY_INTERVAL = 10000;
-const CONNECTION_TIMEOUT = 4000;
+const CONNECTION_TIMEOUT = 10000;
 
 if (!PRIMARY_COORDINATOR || !PUBLIC_URL) {
     console.log("Uso: node server.js <PUERTO> <WS_COORDINADOR> <URL_PUBLICA>");
@@ -61,15 +61,19 @@ function agregarCoordinador(url) {
     }
 }
 
-function registrarBackupsDesdeMensaje(data) {
-    if (!data) return;
+function registrarBackupsDesdeMensaje(payload) {
+    if (!payload) return;
 
-    if (Array.isArray(data.lista)) {
-        data.lista.forEach(agregarCoordinador);
-    }
+    const fuentes = [payload, payload.data].filter(Boolean);
 
-    if (Array.isArray(data.backups)) {
-        data.backups.forEach(agregarCoordinador);
+    for (const fuente of fuentes) {
+        if (Array.isArray(fuente.lista)) {
+            fuente.lista.forEach(agregarCoordinador);
+        }
+
+        if (Array.isArray(fuente.backups)) {
+            fuente.backups.forEach(agregarCoordinador);
+        }
     }
 }
 
@@ -77,8 +81,10 @@ function iniciarPulso() {
     limpiarIntervaloPulso();
 
     intervaloPulso = setInterval(() => {
-        if (lastHeartbeat && Date.now() - lastHeartbeat > CONNECTION_TIMEOUT) {
-            console.log("Heartbeat expirado. Iniciando failover...");
+        const tiempoSinHeartbeat = lastHeartbeat ? Date.now() - lastHeartbeat : 0;
+
+        if (lastHeartbeat && tiempoSinHeartbeat > CONNECTION_TIMEOUT) {
+            console.log(`Heartbeat expirado (${tiempoSinHeartbeat} ms). Iniciando failover...`);
             hacerFailover();
             return;
         }
@@ -125,10 +131,22 @@ function enviarMensaje(payload) {
 function register() {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
+    const timeStamp = Date.now();
+
     enviarMensaje({
         type: "register",
         id,
-        url: PUBLIC_URL
+        url: PUBLIC_URL,
+        workerId: id,
+        workerUrl: PUBLIC_URL,
+        timeStamp,
+        data: {
+            id,
+            url: PUBLIC_URL,
+            workerId: id,
+            workerUrl: PUBLIC_URL,
+            timeStamp
+        }
     });
 
     console.log(`Registrado en ${coordinadorActual}`);
@@ -176,17 +194,29 @@ function connect(targetUrl = coordinadorActual, options = {}) {
             const data = JSON.parse(msg.toString());
             console.log("Mensaje:", data);
 
-            if (data.type === "backups") {
+            const tipo = String(data.type || "")
+                .toLowerCase()
+                .trim();
+
+            if (tipo === "backups") {
                 registrarBackupsDesdeMensaje(data);
             }
 
-            if (data.type === "register-ok" || data.type === "pulse-ok") {
+            const esRespuestaDeVida =
+                tipo === "register-ok" ||
+                tipo === "registered" ||
+                tipo === "pulse-ok" ||
+                tipo === "pulse_received" ||
+                tipo === "pulse-received";
+
+            if (esRespuestaDeVida) {
                 estado = "alive";
                 lastHeartbeat = Date.now();
                 registrarBackupsDesdeMensaje(data);
+                console.log("Heartbeat actualizado:", new Date(lastHeartbeat).toISOString());
             }
         } catch (error) {
-            console.log("Mensaje inválido");
+            console.log("Mensaje inválido:", error.message);
         }
     });
 
@@ -388,9 +418,18 @@ function sendPulse() {
     }
 
     try {
+        const timeStamp = Date.now();
+
         ws.send(JSON.stringify({
             type: "pulse",
-            id
+            id,
+            workerId: id,
+            timeStamp,
+            data: {
+                id,
+                workerId: id,
+                timeStamp
+            }
         }));
 
         console.log(`Pulso enviado a ${coordinadorActual}`);

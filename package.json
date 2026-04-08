@@ -1,8 +1,14 @@
 {
+  "name": "worker-david-55222507",
+  "version": "1.0.0",
+  "description": "Worker para sistema distribuido coordinador-trabajador",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
   "dependencies": {
-    "cors": "^2.8.6",
-    "crypto": "^1.0.1",
-    "express": "^5.2.1",
-    "ws": "^8.19.0"
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "ws": "^8.18.0"
   }
 }

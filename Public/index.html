@@ -3,135 +3,253 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Worker Monitoring Panel</title>
-  <link rel="stylesheet" href="style.css" />
+  <title>Worker Console</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="css/style.css" />
 </head>
 
 <body>
-  <div class="app-shell">
+  <canvas id="fxCanvas" class="fx-canvas"></canvas>
 
-    <header class="topbar">
-      <div class="brand">
-        <div class="brand-mark"></div>
-        <div class="brand-copy">
-          <h1>Worker Monitoring David Forero</h1>
-          <p>Panel de monitoreo en tiempo real del nodo worker</p>
+  <div class="bg-base"></div>
+  <div class="bg-vignette"></div>
+  <div class="noise-layer"></div>
+  <div class="grid-overlay"></div>
+  <div class="glow glow-a"></div>
+  <div class="glow glow-b"></div>
+  <div class="glow glow-c"></div>
+  <div id="cursorAura" class="cursor-aura"></div>
+
+  <div class="app-shell">
+    <header class="top-ribbon glass-panel">
+      <div class="top-ribbon-left">
+        <div class="brand-lockup">
+          <div class="brand-mark">
+            <span class="brand-ring"></span>
+            <span class="brand-core">W</span>
+          </div>
+
+          <div class="brand-copy">
+            <span class="eyebrow">Sistemas Distribuidos • Worker Interface</span>
+            <h1>Worker Console David</h1>
+            <p>
+              Consola de monitoreo del worker, con estado actual, líder detectado,
+              coordinadores conocidos, capacidades, carga y historial
+              de ejecución.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="top-ribbon-right">
+        <div class="status-capsule">
+          <span class="capsule-label">Estado global</span>
+          <div class="capsule-status">
+            <span id="statusDot" class="status-dot neutral"></span>
+            <span id="statusText">Cargando</span>
+          </div>
         </div>
       </div>
     </header>
 
-    <section class="hero-card">
-      <div class="hero-top">
-        <div class="hero-copy">
-          <h2 id="heroBadge">Worker operativo</h2>
-          <p id="heroSubtitle">Cargando estado actual del worker...</p>
+    <section class="hero-grid">
+      <article class="hero-panel hero-panel-main glass-panel">
+        <div class="hero-panel-header">
+          <div class="hero-copy">
+            <span class="micro-tag">Worker Monitoring</span>
+            <h2 id="heroBadge">Worker operativo</h2>
+            <p id="heroSubtitle">Cargando estado actual del worker...</p>
+          </div>
+
+          <div class="hero-side-pod">
+            <span class="hero-side-label">Última actualización</span>
+            <span id="lastUpdate" class="hero-side-value">Cargando...</span>
+          </div>
         </div>
 
-        <div class="hero-status">
-          <span id="statusDot" class="status-dot neutral"></span>
-          <span id="statusText">Cargando</span>
-        </div>
-      </div>
-
-      <div class="hero-metrics">
-        <div class="metric-card">
-          <span class="metric-label">ID del Worker</span>
-          <span id="workerIdMain" class="metric-value">Cargando...</span>
+        <div class="hero-visual">
+          <div class="energy-orb orb-a"></div>
+          <div class="energy-orb orb-b"></div>
+          <div class="energy-lines"></div>
+          <div class="hero-overlay-text">
+            <span class="hero-mini-title">Worker distribuido</span>
+            <h3>Monitoreo de estado, líder, coordinadores, tareas y failover.</h3>
+          </div>
         </div>
 
-        <div class="metric-card">
-          <span class="metric-label">Estado</span>
-          <span id="workerStatus" class="metric-value status-badge neutral">Cargando...</span>
+        <div class="metric-strip">
+          <article class="metric-tile metric-tile-feature">
+            <span class="metric-label">ID del Worker</span>
+            <span id="workerIdMain" class="metric-value">Cargando...</span>
+          </article>
+
+          <article class="metric-tile">
+            <span class="metric-label">Estado</span>
+            <span id="workerStatus" class="metric-value status-badge neutral">Cargando...</span>
+          </article>
+
+          <article class="metric-tile">
+            <span class="metric-label">Load</span>
+            <span id="workerLoad" class="metric-value">0.00</span>
+          </article>
+
+          <article class="metric-tile">
+            <span class="metric-label">Coordinadores</span>
+            <span id="totalCoords" class="metric-value">0</span>
+          </article>
+        </div>
+      </article>
+
+      <article class="hero-panel hero-panel-side glass-panel">
+        <div class="side-stat-card">
+          <span class="side-stat-label">Coordinador actual</span>
+          <span id="currentCoordName" class="side-stat-value">Cargando...</span>
         </div>
 
-        <div class="metric-card">
-          <span class="metric-label">Coordinador actual</span>
-          <span id="currentCoordName" class="metric-value">Cargando...</span>
+        <div class="side-stat-card">
+          <span class="side-stat-label">Leader ID</span>
+          <span id="leaderId" class="side-stat-value">No disponible</span>
         </div>
 
-        <div class="metric-card">
-          <span class="metric-label">Coordinadores detectados</span>
-          <span id="totalCoords" class="metric-value">0</span>
+        <div class="side-stat-card">
+          <span class="side-stat-label">Leader URL</span>
+          <span id="leaderUrl" class="side-stat-value">No disponible</span>
         </div>
-      </div>
+
+        <div class="side-stat-card">
+          <span class="side-stat-label">Leader Priority</span>
+          <span id="leaderPriority" class="side-stat-value">No disponible</span>
+        </div>
+
+        <div class="side-stat-card">
+          <span class="side-stat-label">Último heartbeat</span>
+          <span id="lastHeartbeat" class="side-stat-value">No disponible</span>
+        </div>
+
+        <div class="side-stat-card accent-side-card">
+          <span class="side-stat-label">Capacidades</span>
+          <span id="capabilities" class="side-stat-value">No disponibles</span>
+        </div>
+      </article>
     </section>
 
     <main class="dashboard-grid">
-
-      <section class="panel">
-        <h3>Resumen del Worker</h3>
-        <p class="panel-subtitle">
-          Información general y estado de ejecución del nodo.
-        </p>
-
-        <div class="info-list">
-          <div class="info-item">
-            <span class="info-item-label">ID</span>
-            <span id="workerIdDetail" class="info-item-value">Cargando...</span>
+      <section class="glass-panel section-card">
+        <div class="section-head">
+          <div>
+            <span class="section-kicker">Node Overview</span>
+            <h3>Resumen del Worker</h3>
           </div>
+        </div>
 
-          <div class="info-item">
-            <span class="info-item-label">Coordinador actual</span>
-            <span id="coordinatorCurrent" class="info-item-value">Cargando...</span>
-          </div>
+        <div class="summary-cards">
+          <article class="summary-card">
+            <span class="summary-label">ID del Worker</span>
+            <span id="workerIdDetail" class="summary-value">Cargando...</span>
+          </article>
 
-          <div class="info-item">
-            <span class="info-item-label">Timestamp</span>
-            <span id="timeStamp" class="info-item-value">Cargando...</span>
-          </div>
+          <article class="summary-card">
+            <span class="summary-label">Coordinador actual</span>
+            <span id="coordinatorCurrent" class="summary-value">Cargando...</span>
+          </article>
 
-          <div class="info-item">
-            <span class="info-item-label">Última actualización</span>
-            <span id="lastUpdate" class="info-item-value">Cargando...</span>
-          </div>
+          <article class="summary-card">
+            <span class="summary-label">Timestamp</span>
+            <span id="timeStamp" class="summary-value">Cargando...</span>
+          </article>
         </div>
       </section>
 
-      <section class="panel">
-        <h3>Coordinadores registrados</h3>
-        <p class="panel-subtitle">
-          Lista dinámica del coordinador principal y sus backups detectados.
-        </p>
+      <section class="glass-panel section-card full-width">
+        <div class="section-head">
+          <div>
+            <span class="section-kicker">Coordinator Topology</span>
+            <h3>Mapa de coordinadores</h3>
+            <p class="section-subtitle">
+              Lista dinámica de coordinadores conocidos, líder actual y nodo en uso.
+            </p>
+          </div>
+        </div>
 
         <ul id="coordinatorList" class="coord-list">
           <li class="coord-item empty">Cargando...</li>
         </ul>
       </section>
 
-      <section class="panel full-width">
-        <h3>Cambio manual de coordinador</h3>
-        <p class="panel-subtitle">
-          Ingresa la URL de un coordinador para agregarlo o cambiarte manualmente, o busca un backup disponible.
-        </p>
-
-        <div class="manual-switch-box">
-          <input
-            id="manualCoordinatorInput"
-            class="coord-input"
-            type="text"
-            placeholder="Ej: ws://localhost:5001"
-          />
-
-          <div class="manual-actions">
-            <button id="addCoordinatorBtn" class="glass-btn">Agregar</button>
-            <button id="switchCoordinatorBtn" class="glass-btn primary-btn">Cambiar manualmente</button>
-            <button id="switchAvailableBtn" class="glass-btn">Buscar disponible</button>
+      <section class="glass-panel section-card full-width">
+        <div class="section-head">
+          <div>
+            <span class="section-kicker">Task History</span>
+            <h3>Historial de tareas</h3>
+            <p class="section-subtitle">
+              Registro de tareas ejecutadas por el worker, mostrando si terminaron en
+              <strong>ok</strong> o <strong>error</strong>.
+            </p>
           </div>
         </div>
 
-        <p id="manualActionMessage" class="manual-message">
+        <ul id="taskHistoryList" class="coord-list">
+          <li class="coord-item empty">No hay historial de tareas</li>
+        </ul>
+      </section>
+
+      <section class="glass-panel section-card full-width">
+        <div class="section-head">
+          <div>
+            <span class="section-kicker">Manual Control</span>
+            <h3>Gestión manual de coordinadores</h3>
+            <p class="section-subtitle">
+              Conecta el worker a un coordinador, agrega uno nuevo, cambia manualmente o busca uno disponible.
+            </p>
+          </div>
+        </div>
+
+        <div class="control-shell">
+          <div class="control-input-wrap">
+            <label class="input-label" for="manualCoordinatorInput">WebSocket Coordinator URL</label>
+            <input
+              id="manualCoordinatorInput"
+              class="coord-input"
+              type="text"
+              placeholder="Ej: wss://mi-coordinador.ngrok-free.app"
+              autocomplete="off"
+            />
+          </div>
+
+          <div class="control-actions">
+            <button id="connectCoordinatorBtn" class="action-btn action-btn-primary">
+              Conectar
+            </button>
+            <button id="addCoordinatorBtn" class="action-btn action-btn-soft">
+              Agregar
+            </button>
+            <button id="switchCoordinatorBtn" class="action-btn action-btn-soft">
+              Cambiar manualmente
+            </button>
+            <button id="switchAvailableBtn" class="action-btn action-btn-accent">
+              Buscar disponible
+            </button>
+          </div>
+        </div>
+
+        <p id="manualActionMessage" class="manual-message neutral">
           Esperando acción...
         </p>
       </section>
-
     </main>
 
-    <p class="footer-note">
-      Monitoreo en vivo del worker David.
-    </p>
-
+    <footer class="footer-note">
+      Worker Console • David
+    </footer>
   </div>
 
-  <script src="index.js"></script>
+  <script src="css/effects.js"></script>
+  <script src="dashboard.js"></script>
 </body>
 </html>
